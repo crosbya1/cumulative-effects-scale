@@ -1,0 +1,63 @@
+
+substr(gridnum$StationKey[1], 10, 11)
+
+as.numeric(substr(gridnum$StationKey[1], 10, 11))
+
+statnum <- data.frame(ss = gridnum$StationKey, grid = gridnum$Gridnum, point = sapply(1:nrow(gridnum), function(x) as.numeric(substr(gridnum$StationKey[x], 9, 11))))
+
+
+x.dim <- 10 # the x-dimension of the matrix (number of columns)
+
+y.dim <- 10 # The y-dimension of the matrix (number of rows)
+
+win.size <- 3 # The size of the square window (number of points)
+
+t.y <- y.dim - win.size + 1 # The number of windows fit going down the y dimension
+t.x <- x.dim - win.size + 1 # The number of windows going across the x dimension
+
+ts <- 1:t.y # Numbered sequence of windows in the y dimension
+tx <- 1:t.x
+
+z <- t.y*t.x # The total number of windows
+
+s.y <- ((1:win.size) - 1)*y.dim + (tx[i] - 1)*y.dim
+s.x <- ((1:win.size) - 1)*x.dim
+
+v <- ts[2]
+unlist(lapply(1:length(s), function(x) (v:(v + i - 1)) + s.y[x]))
+
+
+
+
+  lapply(1:t.y, function(j){
+  v <- ts[j]
+  u <- unlist(lapply(1:win.size, function(x) (v:(v + win.size - 1)) + s.y[x]))
+  return(u)
+})
+
+
+
+
+
+win.list <- function(x.dim, y.dim, win.size){
+  t.y <- y.dim - win.size + 1 # The number of windows fit going down the y dimension
+  t.x <- x.dim - win.size + 1 # The number of windows going across the x dimension
+  ts <- 1:t.y # Numbered sequence of windows in the y dimension
+  tx <- 1:t.x
+  
+  p <- do.call(c, lapply(1:t.x, function(i){
+    s.y <- ((1:win.size) - 1)*y.dim + (tx[i] - 1)*y.dim
+    d <- lapply(1:t.y, function(j){
+      v <- ts[j]
+      u <- unlist(lapply(1:win.size, function(x) (v:(v + win.size - 1)) + s.y[x]))
+      return(u)
+    })
+    return(d)
+  }))
+  return(p)
+}
+
+
+win.list(10, 10, 2)
+
+

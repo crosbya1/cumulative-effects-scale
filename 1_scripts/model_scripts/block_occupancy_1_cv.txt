@@ -1,0 +1,57 @@
+# This model estimates point-level occupancy probability as a joint probability of block-level human footprint and point-level habitat
+# and adds a cross-validation component
+
+
+model{
+
+  #Priors
+  for(i in 1:n.beta.block){
+    beta.block[i] ~ dnorm(0, 0.1)
+  }
+
+  for(i in 1:n.beta.point){
+    beta.point[i] ~ dnorm(0, 0.1)
+  }
+  
+  # The detection coefficients 
+  for(i in 1:n.beta.p){
+    beta.p[i] ~ dnorm(0, 0.1)
+  }
+  
+# Train the model 
+  # Likelihood on mean within-block occupancy probability
+  for(i in 1:ntrain.block){
+    logit(psi[i]) <- inprod(beta.block, cov.block[i, ]) # the proportion of area occupied as a function of human footprint
+  }
+  
+  # Likelihood on detecting the species conditional on occupancy
+  for(i in 1:ntrain.site){
+    logit(theta[i]) <- inprod(beta.point, cov.point[i, ])
+	z[i] ~ dbern(psi[point.block.train[i]]*theta[i]) # Point-level occupancy as a function of block-level parameters
+	for(j in 1:n.surv[i]){
+	  logit(p[i, j]) <- inprod(beta.p, cov.p[i, j, ])
+	  y[i, j] ~ dbern(z[i]*p[i, j])
+	}
+  }
+  
+# Test the model  
+  # Likelihood on mean within-block occupancy probability
+  for(i in 1:ntest.block){
+    logit(psi.test[i]) <- inprod(beta.block, cov.block[(i + ntrain.block), ]) # the proportion of area occupied as a function of human footprint
+  }
+  
+  for(i in 1:ntest.site){
+    logit(theta.test[i]) <- inprod(beta.point, cov.point[(i + ntrain.site), ])
+	for(j in 1:n.surv[(i + ntrain.site)]){
+	  logit(p.test[i, j]) <- inprod(beta.p, cov.p[(i + ntrain.site), j, ])
+  
+      prob1[i, j] <- pow(p.test[i, j], y[(i + ntrain.site), j])*pow((1-p.test[i, j]), (1 - y[(i + ntrain.site), j]))
+      prob2[i, j] <- 1 - p.test[i, j]
+	}
+    term1[i] <- indicator[(i + ntrain.site)]*(psi.test[point.block.test[i]]*theta.test[i])*prod(prob1[i, 1:n.surv[(i + ntrain.site)]])
+    term2[i] <- (1 - indicator[(i + ntrain.site)])*((1 - (psi.test[point.block.test[i]]*theta.test[i])) + (psi.test[point.block.test[i]]*theta.test[i])*prod(prob2[i, 1:n.surv[(i + ntrain.site)]]))
+    prob.y[i] <- term1[i] + term2[i]
+    lprob.y[i] <- log(prob.y[i])
+  }
+  l.score <- -2*sum(lprob.y[])
+}

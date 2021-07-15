@@ -1,0 +1,45 @@
+# This model estimates tbe coefficients of the habitat variables in the point-level occupancy model as a function of block-level 
+# human footprint (i.e. a functional response). 
+
+
+model{
+
+  #Priors
+  # The coefficients 
+  for(i in 1:n.beta.block){
+    for(j in 1:n.beta.point){
+	  beta.block[j, i] ~ dnorm(0, 0.1)
+	} 
+  }
+  
+  # The detection coefficients 
+  for(i in 1:n.beta.p){
+    beta.p[i] ~ dnorm(0, 0.1)
+  }
+  
+  
+  # Likelihood estimates of block-level beta coefficients for point-level habitat variables
+  for(i in 1:n.block){
+    for(j in 1:n.beta.point){
+	  beta.point[i, j] <- inprod(beta.block[j, ], cov.block[i, ])
+	}
+  }
+  
+  # Likelihood on detecting the species conditional on occupancy
+  for(i in 1:n.site){
+	logit(theta[i]) <- inprod(beta.point[point.block[i], ], cov.point[i, ])
+	z[i] ~ dbern(theta[i]) # Point-level occupancy as a function of point-level habitat and block-level hf
+	for(j in 1:n.surv[i]){
+	  logit(p[i, j]) <- inprod(beta.p, cov.p[i, j, ])
+	  y[i, j] ~ dbern(z[i]*p[i, j])
+	
+      prob1[i, j] <- pow(p[i, j], y[i, j])*pow((1-p[i, j]), (1 - y[i, j]))
+      prob2[i, j] <- 1 - p[i, j]
+	}
+    term1[i] <- indicator[i]*theta[i]*prod(prob1[i, 1:n.surv[i]])
+    term2[i] <- (1 - indicator[i])*((1 - theta[i]) + theta[i]*prod(prob2[i, 1:n.surv[i]]))
+    prob.y[i] <- term1[i] + term2[i]
+    lprob.y[i] <- log(prob.y[i])
+  }
+  l.score <- -2*sum(lprob.y[])
+}

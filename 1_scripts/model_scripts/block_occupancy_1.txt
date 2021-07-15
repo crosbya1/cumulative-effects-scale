@@ -1,0 +1,51 @@
+# This model estimates point-level occupancy probability as a joint probability of block-level human footprint and point-level habitat
+
+
+model{
+
+  #Hyperpriors
+  sd.grid ~ dunif(0, 5)
+  tau.grid <- pow(sd.grid, -2)
+  
+  for(i in 1:n.grid){
+    eps.grid[i] ~ dnorm(0, tau.grid)
+  }
+  
+  #Priors
+  for(i in 1:n.beta.block){
+    beta.block[i] ~ dnorm(0, 0.1)
+  }
+
+  for(i in 1:n.beta.point){
+    beta.point[i] ~ dnorm(0, 0.1)
+  }
+  
+  # The detection coefficients 
+  for(i in 1:n.beta.p){
+    beta.p[i] ~ dnorm(0, 0.1)
+  }
+  
+  
+  # Likelihood on mean within-block occupancy probability
+  for(i in 1:n.block){
+    logit(psi[i]) <- inprod(beta.block, cov.block[i, ]) # the proportion of area occupied as a function of human footprint
+  }
+  
+  # Likelihood on detecting the species conditional on occupancy
+  for(i in 1:n.site){
+    logit(theta[i]) <- inprod(beta.point, cov.point[i, ])
+	z[i] ~ dbern(psi[point.block[i]]*theta[i]) # Point-level occupancy as a function of block-level parameters
+	for(j in 1:n.surv[i]){
+	  logit(p[i, j]) <- inprod(beta.p, cov.p[i, j, ]) + eps.grid[point.grid[i]]
+	  y[i, j] ~ dbern(z[i]*p[i, j])
+	
+      prob1[i, j] <- pow(p[i, j], y[i, j])*pow((1-p[i, j]), (1 - y[i, j]))
+      prob2[i, j] <- 1 - p[i, j]
+	}
+    term1[i] <- indicator[i]*(psi[point.block[i]]*theta[i])*prod(prob1[i, 1:n.surv[i]])
+    term2[i] <- (1 - indicator[i])*((1 - (psi[point.block[i]]*theta[i])) + (psi[point.block[i]]*theta[i])*prod(prob2[i, 1:n.surv[i]]))
+    prob.y[i] <- term1[i] + term2[i]
+    lprob.y[i] <- log(prob.y[i])
+  }
+  l.score <- -2*sum(lprob.y[])
+}

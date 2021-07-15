@@ -1,0 +1,376 @@
+---
+title: "Big Grid block-level analyses"
+author: "Andrew Crosby"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::opts_knit$set(root.dir = normalizePath(".."))  #Sets the working directory to the project folder
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+rm(list=ls(all = TRUE))
+
+library(reshape2)
+library(abind)
+library(tidyr)
+library(jagsUI)
+library(boot)
+library(coda)
+library(knitr)
+library(loo)
+library(dplyr)
+
+```
+
+
+The difference between this model and previously-developed mutli-scale occupancy models [@Mordecai2011; @Crosby2018] is that the quantity of interest is not presence/absence at the larger-scale unit level, but rather the proportion of area occupied within the unit as a function of unit-level variables (i.e., human footprint within the unit). Thus, probability of use at the sub-unit level is constrained by unit level human footprint as well as conditional on unit level occupancy. 
+
+In the most basic model, we estimate the proportion of area occupied as a mean probability of occupancy among all sites within a block, which is a function of human footprint + error. We accounted for heterogeneity in occupancy probability by modeling probability of detection as a function of dominant habitat and survey-level covariates julian day and time from sunrise. 
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+load("0_data/processed/big-grid-point-data.Rdata")
+load("0_data/processed/big-grid-veghf-blocks.Rdata")
+
+
+
+# Get the dominant landcover type within 150m of each point 
+d <- veghf_150
+colnames(d)[19] <- "prop.hf"
+lc <- d[, c("prop.decid", "prop.mixed", "prop.pine", "prop.spruce", "prop.Bspr", "prop.larch", "prop.low", "prop.open")]
+is.decid <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 1, 1, 0), 0)))
+is.mixed <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 2, 1, 0), 0)))
+is.pine <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 3, 1, 0), 0)))
+is.spruce <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 4, 1, 0), 0)))
+is.Bspr <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 5, 1, 0), 0)))
+is.larch <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 6, 1, 0), 0)))
+is.low <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 7, 1, 0), 0)))
+is.open <- unlist(sapply(1:nrow(lc), function(x) ifelse(max(lc[x, ]) > 0, ifelse(which(lc[x, ] == max(lc[x, ])) == 8, 1, 0), 0)))
+
+
+veghf150_dom <- data.frame(d, is.decid, is.pine, is.mixed, is.spruce, is.Bspr, is.larch, is.low, is.open)
+
+dom.list <- c("is.decid", "is.pine", "is.mixed", "is.spruce", "is.Bspr", "is.larch", "is.low", "is.open")
+
+# Create the dominance weighting
+for(i in 1:length(dom.list)){
+  t <- dom.list[i]
+  v <- which(colnames(veghf150_dom) == paste0("prop.", substr(dom.list[i], 4, nchar(dom.list[i]))))
+  assign(paste0("dom.", substr(dom.list[i], 4, nchar(dom.list[i]))), pmax(0, pmin(1, 2*veghf150_dom[, v] - 0.5)))
+}
+
+
+veghf150_dom <- data.frame(veghf150_dom, dom.decid, dom.pine, dom.mixed, dom.spruce, dom.Bspr, dom.larch, dom.low, dom.open)
+
+# Expand the veg data to add the quadratic and interaction terms
+veghf_expand <- data.frame(age = veghf150_dom$wt_mean_age, age2 = veghf150_dom$wt_mean_age^2, veghf150_dom[, c(28:35)], total.hf = veghf_300$total.hf)
+
+
+# Standardize the age variables 
+veghf_dom <- veghf_expand %>% mutate_at(c("age", "age2", "total.hf"), ~(scale(.) %>% as.vector))
+rownames(veghf_dom) <- rownames(veghf_expand)
+
+all.equal(rownames(veghf_dom), bg_nsurv_veg$StationKey, bg_ss_veg$StationKey)
+
+```
+
+
+Run the basic block model where psi is constant based on hf and error, and p varies according to dominant habitat type, jday, and tssr
+```{r}
+
+
+  spp_code <- "OVEN"
+
+  spp_point <- bg_pa[, c(1:2, which(colnames(bg_pa) == spp_code))] 
+  
+  spp_pt <- spp_point %>% spread(survey, spp_code) 
+  spp_pt <- spp_pt[match(bg_nsurv_veg$StationKey, spp_pt$StationKey), 1:5] 
+  
+  cat("Rows match?\n")
+  print(all.equal(bg_nsurv_veg$StationKey, spp_pt$StationKey, rownames(veghf))) 
+  
+  hab <- veghf150_dom[, c("is.decid", "is.pine", "is.mixed", "is.spruce", "is.Bspr", "is.larch", "is.low", "is.open")]
+  
+  det <- det.var_veg
+  
+  all.equal(rownames(det.var_veg), rownames(veghf150_dom))
+  d <- list()
+  for(i in 1:dim(det.var_veg)[2]){
+    b <- cbind(det.var_veg[, i, "int"], hab, det.var_veg[, i, c(2:3)])
+    colnames(b) <- c("int", colnames(b[-1]))
+    d[[i]] <- b
+  }
+  
+  
+  
+  det.hab <- abind::abind(d, along = 3)
+  det.hab <- aperm(det.hab, c(1, 3, 2))
+  
+  
+  all.equal(rownames(det.var_veg), rownames(veghf150_dom))
+
+```
+
+
+Run the test model for oven bird in the 2x2 blocks
+
+```{r}
+
+blockhf <- grids_veghf[[2]][, c("blockID", "total.hf")]
+
+block_cov <- data.frame(int = rep(1, nrow(blockhf)), blockhf[, "total.hf"])
+rownames(block_cov) <- blockhf$blockID
+
+point_cov <- data.frame(int = rep(1, nrow(hab)), hab)
+
+all.equal(spp_pt$StationKey, rownames(det), rownames(point_cov))
+
+set.seed(1234)
+test <- sort(sample(1:nrow(blockhf), 50, replace = FALSE))
+
+block.test <- blockhf[test, ]
+block_cov.test <- block_cov[test, ]
+rownames(block_cov.test) <- rownames(block_cov)[test]
+
+pt.test <- point.block[[2]][which(point.block[[2]]$block %in% block.test$blockID), ]
+
+spp_pt.test <- spp_pt[match(pt.test$ss, spp_pt$StationKey), ]
+det.test <- det[match(pt.test$ss, rownames(det)), , 1:3]
+point_cov.test <- point_cov[match(pt.test$ss, rownames(point_cov)), , ]
+nsurv.test <- bg_nsurv_veg[match(pt.test$ss, bg_nsurv_veg$StationKey), ]
+
+all.equal(spp_pt.test$StationKey, rownames(det.test), rownames(hab.test), pt.test$ss, nsurv.test$StationKey)
+
+
+ni <- 1000; nt <- 1; nb <- 500; nc <- 3 
+    
+params_1 <- c("beta.block", "beta.point", "beta.p", "sd.grid", "l.score")#, "lprob.y") 
+zst <- apply(spp_pt.test[, -1], 1, max, na.rm = T)  
+inits.psi <- function() {list(z = zst, beta.block = rnorm(ncol(block_cov.test)), beta.point = rnorm(ncol(point_cov.test)), beta.p = rnorm(dim(det.test)[3]))}    
+    
+data <- list(n.site = nrow(spp_pt.test), y = as.matrix(spp_pt.test[, -1]), cov.block = block_cov.test, cov.point = point_cov.test, cov.p = det.test, n.beta.block = ncol(block_cov.test), n.beta.point = ncol(point_cov.test), n.beta.p = dim(det.test)[3], n.surv = nsurv.test$nsurv, n.block = nrow(block_cov.test), block = as.numeric(as.factor(rownames(block_cov.test))), point.block = as.numeric(as.factor(pt.test$block)), indicator = zst, n.grid = nlevels(as.factor(pt.test$grid)), point.grid = as.numeric(as.factor(pt.test$grid)))
+
+  system.time({
+    out_1 <- jags(data = data, inits = inits.psi, parameters.to.save =  params_1, model.file =  "1_scripts/model_scripts/block_occupancy_1.txt", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+  
+waic_1 <- waic(out_1$sims.list$lprob.y) 
+
+params_2 <- c("beta.block", "alpha", "beta1", "beta.point", "beta.p", "l.score", "lprob.y") 
+inits_2 <- function() {list(z = zst, beta.block = rnorm(ncol(block_cov.test)), beta.point = rnorm(ncol(point_cov.test) - 1), beta.p = rnorm(dim(det.test)[3]))}    
+
+data_2 <- list(n.site = nrow(spp_pt.test), y = as.matrix(spp_pt.test[, -1]), cov.block = block_cov.test, cov.point = point_cov.test[, -1], cov.p = det.test, n.beta.block = ncol(block_cov.test), n.beta.point = ncol(point_cov.test) - 1, n.beta.p = dim(det.test)[3], n.surv = nsurv.test$nsurv, n.block = nrow(block_cov.test), block = as.numeric(as.factor(rownames(block_cov.test))), point.block = as.numeric(as.factor(pt.test$block)), indicator = zst)
+
+
+  system.time({
+    out_2 <- jags(data = data_2, inits = inits_3, parameters.to.save =  params_2, model.file =  "1_scripts/model_scripts/block_occupancy_2.txt", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+  
+waic_2 <- waic(out_2$sims.list$lprob.y) 
+
+  
+inits_3 <- function() {list(z = zst)}    
+
+params_3 <- c("beta.block", "beta.p", "l.score", "lprob.y") 
+
+  system.time({
+    out_3 <- jags(data = data, inits = inits_3, parameters.to.save =  params_3, model.file =  "1_scripts/model_scripts/block_occupancy_3.txt", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+  
+waic_3 <- waic(out_3$sims.list$lprob.y) 
+
+  
+
+```
+
+Run the cross-validation model
+```{r}
+nobs.block <- nrow(block.test)
+k = 5
+nk <- 1/k
+leavout <- sample(rep(1:(nobs.block/(nobs.block*nk)), ceiling(nobs.block*nk))[1:nobs.block])
+
+sapply(1:length(unique(leavout)), function(x) length(which(leavout == x)))
+j <- 1
+
+test <- which(leavout == j)
+block.train <- block.test[-test, ]
+block.cv <- rbind(block.train, block.test[test, ])
+
+block_cov.cv <- rbind(block_cov.test[-test, ], block_cov.test[test, ])
+
+pt.train <- pt.test[which(pt.test$block %in% block.train$blockID), ]
+point.test <- pt.test[which(!(pt.test$block %in% block.train$blockID)), ]
+pt.cv <- rbind(pt.train, point.test)
+
+spp_pt.cv <- spp_pt[match(pt.cv$ss, spp_pt$StationKey), ]
+det.cv <- det[match(pt.cv$ss, rownames(det)), , 1:3]
+point_cov.cv <- point_cov[match(pt.cv$ss, rownames(point_cov)), , ]
+nsurv.cv <- bg_nsurv_veg[match(pt.cv$ss, bg_nsurv_veg$StationKey), ]
+
+all.equal(spp_pt.cv$StationKey, rownames(det.cv), rownames(hab.cv), pt.cv$ss, nsurv.cv$StationKey)
+
+
+ni <- 1000; nt <- 1; nb <- 500; nc <- 3 
+    
+params_1 <- c("beta.block", "beta.point", "beta.p", "l.score") 
+zst <- apply(spp_pt.cv[, -1], 1, max, na.rm = T)  
+inits_1 <- function() {list(z = zst[1:nrow(pt.train)], beta.block = rnorm(ncol(block_cov.cv)), beta.point = rnorm(ncol(point_cov.cv)), beta.p = rnorm(dim(det.cv)[3]))}    
+    
+data <- list(ntrain.block = nrow(block.train), ntrain.site = nrow(pt.train), ntest.block = length(test), ntest.site = nrow(pt.cv) - nrow(pt.train), y = as.matrix(spp_pt.cv[, -1]), cov.block = block_cov.cv, cov.point = point_cov.cv, cov.p = det.cv, n.beta.block = ncol(block_cov.cv), n.beta.point = ncol(point_cov.cv), n.beta.p = dim(det.cv)[3], n.surv = nsurv.cv$nsurv, n.block = nrow(block_cov.cv), block = as.numeric(as.factor(rownames(block_cov.cv))), point.block.train = as.numeric(as.factor(pt.train$block)), point.block.test = as.numeric(as.factor(point.test$block)), indicator = zst)
+
+  system.time({
+    out_1.cv <- jags(data = data, inits = inits_1, parameters.to.save =  params_1, model.file =  "1_scripts/model_scripts/block_occupancy_1_cv.txt", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+
+```
+
+Turn it into a function using the Bayesian Lasso
+```{r}
+
+nlam <- 20
+
+log.lambda=seq(-5, 5, length = nlam)
+lambda <- exp(log.lambda)
+
+plot(1:nlam,1/lambda,type="l") 
+
+
+cv.loop_lasso <- function(blocks, blocks_cov, points, points_cov, spp, det, nsurv, k, ni, nt, nb, nc, lambda){
+  nobs.block <- nrow(block.test)
+  nk <- 1/k
+  leavout <- sample(rep(1:(nobs.block/(nobs.block*nk)), ceiling(nobs.block*nk))[1:nobs.block])
+  
+  score <- sapply(1:k, function(j){
+    test <- which(leavout == j)
+    b.t <- blocks[-test, ]
+    b.cv <- rbind(b.t, blocks[test, ])
+    
+    bcov.cv <- rbind(block_cov[-test, ], block_cov[test, ])
+    
+    pts.t <- points[which(points$block %in% b.t$blockID), ]
+    pts.test <- points[which(!(points$block %in% b.t$blockID)), ]
+    pts.cv <- rbind(pts.t, pts.test)
+    
+    spp_pt.cv <- spp[match(pts.cv$ss, spp$StationKey), ]
+    det.cv <- det[match(pts.cv$ss, rownames(det)), , 1:3]
+    points_cov.cv <- points_cov[match(pts.cv$ss, rownames(points_cov)), , ]
+    nsurv.cv <- nsurv[match(pts.cv$ss, nsurv$StationKey), ]
+    
+    all.equal(spp_pt.cv$StationKey, rownames(det.cv), rownames(points_cov.cv), pts.cv$ss, nsurv.cv$StationKey)
+    
+    params <- c("beta.block", "beta.point", "beta.p", "l.score") 
+    zst <- apply(spp_pt.cv[, -1], 1, max, na.rm = T)  
+    inits <- function() {list(z = zst[1:nrow(pts.t)], beta.block = rnorm(ncol(bcov.cv)), beta.point = rnorm(ncol(points_cov.cv)), beta.p = rnorm(dim(det.cv)[3]))}    
+    
+    data <- list(ntrain.block = nrow(b.t), ntrain.site = nrow(pts.t), ntest.block = length(test), 
+                 ntest.site = nrow(pts.cv) - nrow(pts.t), y = as.matrix(spp_pt.cv[, -1]), cov.block = bcov.cv, 
+                 cov.point = points_cov.cv, cov.p = det.cv, n.beta.block = ncol(bcov.cv), 
+                 n.beta.point = ncol(points_cov.cv), n.beta.p = dim(det.cv)[3], n.surv = nsurv.cv$nsurv, 
+                 n.block = nrow(bcov.cv), block = as.numeric(as.factor(rownames(bcov.cv))), 
+                 point.block.train = as.numeric(as.factor(pts.t$block)), 
+                 point.block.test = as.numeric(as.factor(pts.test$block)), indicator = zst, lambda = lambda)
+    
+    system.time({
+      out <- jags(data = data, inits = inits, parameters.to.save =  params_1, 
+                  model.file =  "1_scripts/model_scripts/block_occupancy_1_cv_lasso.txt", 
+                  n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+    return(out$mean$l.score)
+  })
+  return(score)
+}
+
+system.time({
+  lasso.1 <- mean(cv.loop_lasso(blocks = block.test, blocks_cov = block_cov.test, points = pt.test, points_cov = point_cov, spp = spp_pt, det = det, nsurv = bg_nsurv_veg, k = 5, ni = 1000, nt = 1, nb = 500, nc = 3, lambda = lambda[1]))
+})
+
+system.time({
+  lasso.cv <- sapply(1:length(lambda), function(i) 
+                mean(cv.loop_lasso(blocks = block.test, blocks_cov = block_cov.test, points = pt.test, points_cov = point_cov, spp = spp_pt, det = det, nsurv = bg_nsurv_veg, k = 5, ni = 1000, nt = 1, nb = 500, nc = 3, lambda = lambda[i]))
+                )
+})
+
+l1 <- which(lasso.cv == min(lasso.cv))
+
+lasso.best <- function(blocks, blocks_cov, points, points_cov, spp, det, nsurv, ni, nt, nb, nc, lambda){
+  params_1 <- c("beta.block", "beta.point", "beta.p", "l.score", "lprob.y") 
+  zst <- apply(spp[, -1], 1, max, na.rm = T)  
+  inits.psi <- function() {list(z = zst, beta.block = rnorm(ncol(blocks_cov)), beta.point = rnorm(ncol(points_cov)), beta.p = rnorm(dim(det)[3]))}    
+  
+  data <- list(n.site = nrow(spp), y = as.matrix(spp[, -1]), cov.block = blocks_cov, cov.point = points_cov, cov.p = det, n.beta.block = ncol(blocks_cov), n.beta.point = ncol(points_cov), n.beta.p = dim(det)[3], n.surv = nsurv$nsurv, n.block = nrow(blocks_cov), block = as.numeric(as.factor(rownames(blocks_cov))), point.block = as.numeric(as.factor(points$block)), indicator = zst, lambda = lambda, n.grid = nlevels(as.factor(points$grid)), point.grid = as.numeric(as.factor(points$grid)))
+
+  system.time({
+    out_1 <- jags(data = data, inits = inits.psi, parameters.to.save =  params_1, model.file =  "1_scripts/model_scripts/block_occupancy_1_lasso.txt", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = TRUE)
+    })
+  
+  return(out_1)
+}
+
+system.time({
+  lasso.model <- lasso.best(blocks = block.test, blocks_cov = block_cov.test, points = pt.test, points_cov = point_cov, spp = spp_pt.test, det = det.test, nsurv = nsurv.test, ni = 1000, nt = 1, nb = 500, nc = 3, lambda = lambda[l1])
+})
+
+
+lasso.waic <- waic(lasso.model$sims.list$lprob.y)
+
+
+```
+
+
+Now test it with all the variables
+```{r}
+
+blockhf <- grids_veghf[[2]] %>% select(blockID, prop.seismic, prop.widelin, prop.wells, prop.industry)
+
+
+block_cov <- data.frame(int = rep(1, nrow(blockhf)), blockhf %>% select(-blockID))
+rownames(block_cov) <- blockhf$blockID
+
+point_cov <- data.frame(int = rep(1, nrow(hab)), hab)
+
+all.equal(spp_pt$StationKey, rownames(det), rownames(point_cov))
+
+set.seed(1234)
+test <- sort(sample(1:nrow(blockhf), 100, replace = FALSE))
+
+block.test <- blockhf[test, ]
+block_cov.test <- block_cov[test, ]
+rownames(block_cov.test) <- rownames(block_cov)[test]
+
+pt.test <- point.block[[2]][which(point.block[[2]]$block %in% block.test$blockID), ]
+
+spp_pt.test <- spp_pt[match(pt.test$ss, spp_pt$StationKey), ]
+det.test <- det[match(pt.test$ss, rownames(det)), , 1:3]
+point_cov.test <- point_cov[match(pt.test$ss, rownames(point_cov)), , ]
+nsurv.test <- bg_nsurv_veg[match(pt.test$ss, bg_nsurv_veg$StationKey), ]
+
+all.equal(spp_pt.test$StationKey, rownames(det.test), rownames(hab.test), pt.test$ss, nsurv.test$StationKey)
+
+system.time({
+  lasso.cv <- sapply(1:length(lambda), function(i) 
+                mean(cv.loop_lasso(blocks = block.test, blocks_cov = block_cov.test, points = pt.test, points_cov = point_cov, spp = spp_pt, det = det, nsurv = bg_nsurv_veg, k = 5, ni = 1000, nt = 1, nb = 500, nc = 3, lambda = lambda[i]))
+                )
+})
+
+l1 <- which(lasso.cv == min(lasso.cv))
+
+system.time({
+  lasso.model <- lasso.best(blocks = block.test, blocks_cov = block_cov.test, points = pt.test, points_cov = point_cov, spp = spp_pt.test, det = det.test, nsurv = nsurv.test, ni = 1000, nt = 1, nb = 500, nc = 3, lambda = lambda[l1])
+})
+
+
+lasso.waic <- waic(lasso.model$sims.list$lprob.y)
+
+```
+
+
+## Literature Cited
