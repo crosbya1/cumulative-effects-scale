@@ -1,4 +1,4 @@
-15 July, 2021
+21 July, 2021
 
 # Additive and interactive effects of human footprint across spatial scales
 
@@ -48,6 +48,12 @@ clarity on how anthropogenic disturbance affects bird populations at
 different spatial scales, and provide managers with guidance for
 regulations to conserve avian biodiversity in the western boreal forest
 of Canada.
+
+## Notes on code provided
+
+Because some data is proprietary, only sample datasets are provided.
+Location data has been randomly offset and converted from the original
+coordinate system.
 
 ## Literature Cited
 

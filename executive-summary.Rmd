@@ -1,0 +1,24 @@
+---
+# title: 
+# author: "Andrew Crosby"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: github_document
+bibliography: C:/Users/crosby/Documents/RepResRef.bib
+csl: ecological-applications.csl
+---
+
+
+# Additive and interactive effects of human footprint across spatial scales 
+
+## Executive Summary
+
+Human activity, such as forest harvest, oil and gas drilling, and other industrial development is rapidly altering the North American  boreal landscape [@Brandt2013; @Venier2014], leading to changes in composition and distribution of wildlife species that can be difficult to understand and predict [@Venier2020]. There is growing evidence of the interactive effects of multiple anthropogenic stressors on wildlife populations [@Mahon2019], and understanding these effects is critical to sustainable land management and long-term conservation planning [@Venier2020]. Many boreal bird species demonstrate negative responses to industrial disturbances, which leads to alterations in biodiversity and ecological functioning. Effective regulation of industrial development requires understanding how anthropogenic disturbance effects bird populations and biodiversity. Disturbances can differ greatly in intensity and spatial extent. For example, seismic lines cover an extensive area in parts of the western boreal forest, while having relatively low intensity of impact, while industrial sites, while industrial sites have high impact but are spatially limited [@Mahon2019]. Complicating the issue further, the influence of spatial scale (the grain and extent of measurement) on observed patterns in ecology has been well known, and little understood, for a long time [@Wiens1989; @Mayor2009; @McGarigal2016]. Two primary aspects of this issue are that species' responses to environmental characteristics can change drastically at different spatial scales [domains of scale, @Wiens1989], and that spatial scale is strongly linked to hierarchically  structured levels of organization and ecological processes [@Bissonette1997]. Research has shown additive and interactive effects of anthropogenic disturbance on bird species at single scales [@Mahon2019]. However, it is unclear how these effects might change across spatial scales. The goal of this research is to quantify the effects of multiple disturbance types on boreal bird populations at different spatial scales in the western boreal region of Canada. Our objectives were to: 1) describe the distributions of anthropogenic disturbance types across multiple spatial extents; 2) quantify additive and interactive effects of disturbance across scales; and 3) quantify how effects of individual disturbance types changes across scales as a function of extent and intensity of the disturbance. We hypothesize the scale-dependent effects will differ greatly among disturbance types and species, and that spatial extent versus intensity of disturbance will influence the scale at which individual disturbance types effect populations most strongly. This research will provide clarity on how anthropogenic disturbance affects bird populations at different spatial scales, and provide managers with guidance for regulations to conserve avian biodiversity in the western boreal forest of Canada. 
+
+## Notes on code provided
+Because some data is proprietary, only sample datasets are provided. Location data has been randomly offset and converted to from the original coordinate system. 
+
+
+## Literature Cited
+
+
+
